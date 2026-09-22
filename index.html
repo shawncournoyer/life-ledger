@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
+<title>Life Ledger</title>
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="theme-color" content="#0E1116">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="apple-touch-icon" href="icon-192.png">
+<style>
+  html,body{margin:0;padding:0;height:100%;background:#0E1116;overflow:hidden;
+            font:14px/1.5 -apple-system,Roboto,system-ui,sans-serif;color:#8B949E}
+  /* The app sits in a clipping box. The frame is taller than the box and pulled
+     up by BANNER px, so Google's "created by another user" bar is cropped off
+     the top. It lives in script.google.com's own document, cross-origin, so it
+     cannot be hidden any other way. */
+  #clip{position:fixed;inset:0;overflow:hidden}
+  #app{position:absolute;left:0;width:100%;border:0;display:block}
+  #msg{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;
+       padding:28px;text-align:center}
+  #msg code{color:#E8EAED;background:#161B22;border:1px solid #262D36;
+            border-radius:6px;padding:2px 6px;font-size:13px}
+  /* !important on purpose: #msg is an ID selector that sets display:flex, which
+     outranks a plain .hide class. Without this the "no token" overlay stays on
+     top of the app, swallowing every tap. */
+  .hide{display:none!important}
+</style>
+</head>
+<body>
+
+<div id="clip" class="hide"><iframe id="app" title="Life Ledger"></iframe></div>
+
+<div id="msg">
+  <div>
+    <p style="margin:0 0 10px">No token in the URL.</p>
+    <p style="margin:0">Open this page as<br><code>…/#t=YOUR_TOKEN</code></p>
+  </div>
+</div>
+
+<script>
+/* ---------------------------------------------------------------------------
+   Life Ledger wrapper.
+
+   Why this page exists: Apps Script puts a "created by another user" banner in
+   the top-level document on script.google.com. The app runs in a cross-origin
+   iframe below it and cannot touch it. Wrapping the app in a page WE own lets
+   us crop the banner and, with the manifest, install it as a real standalone
+   app rather than a browser tab.
+
+   The token lives in the URL FRAGMENT. Fragments are never sent to a server,
+   so this file can sit in a public repo with no secret in it.
+--------------------------------------------------------------------------- */
+
+/* Height of Google's banner, in CSS pixels. Bump it if a sliver still shows,
+   or override per-load with #banner=56 without editing this file. */
+var BANNER = 46;
+
+var EXEC = 'PASTE_YOUR_EXEC_URL_HERE';
+
+var frame = document.getElementById('app');
+var clip  = document.getElementById('clip');
+var hash  = {}, TOKEN = '';
+
+function readHash() {
+  hash = {};
+  location.hash.replace(/^#/, '').split('&').forEach(function (kv) {
+    var i = kv.indexOf('=');
+    if (i > 0) hash[decodeURIComponent(kv.slice(0, i))] = decodeURIComponent(kv.slice(i + 1));
+  });
+  if (hash.banner && +hash.banner >= 0) BANNER = +hash.banner;
+}
+
+/* The token is remembered on this origin after the first visit.
+   It has to be: once installed, the manifest launches start_url "./" with NO
+   fragment, so a fragment-only token would work exactly once and then the
+   home screen icon would open to nothing.
+   Storage can be empty or throw (private window, cleared data), so every
+   access is guarded and the page falls back to asking for the token again. */
+function loadToken() {
+  readHash();
+  if (hash.t !== undefined) {                       // fragment wins, and persists
+    TOKEN = hash.t;
+    try { TOKEN ? localStorage.setItem('llToken', TOKEN) : localStorage.removeItem('llToken'); }
+    catch (e) {}
+    return;
+  }
+  try { TOKEN = localStorage.getItem('llToken') || ''; } catch (e) { TOKEN = ''; }
+}
+loadToken();
+
+function src(mode) {
+  return EXEC + '?t=' + encodeURIComponent(TOKEN)
+       + (mode ? '&v=' + encodeURIComponent(mode) : '')
+       + '&e=1';                                   // tells the app it is wrapped
+}
+
+function size() {
+  frame.style.top    = (-BANNER) + 'px';
+  frame.style.height = (window.innerHeight + BANNER) + 'px';
+}
+
+function start() {
+  if (!TOKEN) {
+    document.getElementById('msg').classList.remove('hide');
+    clip.classList.add('hide');
+    return;
+  }
+  document.getElementById('msg').classList.add('hide');
+  clip.classList.remove('hide');
+  size();
+  frame.src = src(hash.v || '');                   // no mode = the app's sticky one
+}
+
+addEventListener('resize', size);
+addEventListener('orientationchange', function () { setTimeout(size, 150); });
+/* Changing the fragment does not reload the page, so re-read it by hand.
+   This is how you swap in a rotated token without clearing site data. */
+addEventListener('hashchange', function () { loadToken(); start(); });
+start();
+
+/* The app's mode buttons post up here instead of navigating, because a normal
+   link with target=_top would replace THIS page with script.google.com and the
+   banner would be right back. Only messages from Google's own origins are
+   accepted, and only the three known mode names. */
+var MODES = { ledger: 1, status: 1, add: 1 };
+
+/* The app runs two frames down (wrapper > script.google.com > googleusercontent
+   sandbox), so e.source identity cannot be used; a grandchild's window is not
+   frame.contentWindow. Falling back to an origin allowlist plus a strict shape
+   check, and the payload can only ever name one of three modes. */
+function trusted(origin) {
+  if (origin === location.origin) return true;                   // our own page
+  return /^https:\/\/([a-z0-9-]+\.)*(google|googleusercontent)\.com$/.test(origin);
+}
+
+addEventListener('message', function (e) {
+  if (!trusted(e.origin)) return;
+  var d = e.data;
+  if (!d || d.app !== 'lifeledger' || !MODES[d.v]) return;
+  frame.src = src(d.v);
+});
+</script>
+</body>
+</html>
