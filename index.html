@@ -36,11 +36,31 @@
      outranks a plain .hide class. Without this the "no token" overlay stays on
      top of the app, swallowing every tap. */
   .hide{display:none!important}
+  /* Crop tuner. Only visible with ?tune=1, and it sits on top of the app so the
+     effect of each tap is visible immediately. */
+  #tune{position:fixed;left:8px;right:8px;bottom:8px;z-index:9;display:flex;gap:6px;
+        align-items:center;background:#161B22;border:1px solid #262D36;border-radius:10px;
+        padding:8px;box-shadow:0 6px 24px rgba(0,0,0,.5)}
+  #tune button{flex:1;padding:10px 0;background:#1B2230;color:#E8EAED;border:1px solid #262D36;
+               border-radius:8px;font:600 15px/1 -apple-system,Roboto,system-ui,sans-serif;
+               -webkit-appearance:none}
+  #tune #done{background:#4FC1B0;color:#0E1116;border-color:#4FC1B0}
+  #tune span{flex:0 0 52px;text-align:center;color:#E8EAED;
+             font:600 14px/1 ui-monospace,SFMono-Regular,Menlo,monospace}
 </style>
 </head>
 <body>
 
 <div id="clip" class="hide"><iframe id="app" title="Life Ledger"></iframe></div>
+
+<div id="tune" class="hide">
+  <button type="button" data-d="-8">−8</button>
+  <button type="button" data-d="-2">−2</button>
+  <span id="tval">46</span>
+  <button type="button" data-d="2">+2</button>
+  <button type="button" data-d="8">+8</button>
+  <button type="button" id="done">Done</button>
+</div>
 
 <div id="msg">
   <form id="form" style="width:100%;max-width:340px">
@@ -68,9 +88,18 @@
    so this file can sit in a public repo with no secret in it.
 --------------------------------------------------------------------------- */
 
-/* Height of Google's banner, in CSS pixels. Bump it if a sliver still shows,
-   or override per-load with #banner=56 without editing this file. */
-var BANNER = 46;
+/* Height of Google's banner, in CSS pixels. It is NOT the same on every device:
+   phone and desktop differ, and Google changes it. So it is tunable at runtime
+   (?tune=1) and the tuned value is stored, because the installed app launches
+   start_url "./" with no parameters at all. */
+var BANNER_DEFAULT = 46;
+var BANNER = BANNER_DEFAULT;
+/* Note the isFinite check: +null is 0, so a plain ">= 0" test on an unset key
+   silently sets the crop to zero. */
+try {
+  var b = localStorage.getItem('llBanner');
+  if (b !== null && isFinite(+b) && +b >= 0) BANNER = +b;
+} catch (e) {}
 
 var EXEC = 'https://script.google.com/macros/s/AKfycbz_t7yUQQfXqDWRy7PWJh-Ho9HbPSUMU2B0GyTqgj-DiXpDeVC7n1jV9JtQ7XADHgsa7A/exec';   // already set to your deployment
 
@@ -78,13 +107,26 @@ var frame = document.getElementById('app');
 var clip  = document.getElementById('clip');
 var hash  = {}, TOKEN = '';
 
+/* Parameters are read from the query string AND the fragment. Both, because
+   some mobile paste targets percent-encode a "#" into the path, which is a 404
+   on a static host: anything that must survive a bad paste has to work as "?".
+   The token is the exception and stays out of the query string entirely. */
 function readHash() {
   hash = {};
-  location.hash.replace(/^#/, '').split('&').forEach(function (kv) {
-    var i = kv.indexOf('=');
-    if (i > 0) hash[decodeURIComponent(kv.slice(0, i))] = decodeURIComponent(kv.slice(i + 1));
-  });
-  if (hash.banner && +hash.banner >= 0) BANNER = +hash.banner;
+  function eat(s) {
+    s.replace(/^[?#]/, '').split('&').forEach(function (kv) {
+      var i = kv.indexOf('=');
+      if (i > 0) hash[decodeURIComponent(kv.slice(0, i))] = decodeURIComponent(kv.slice(i + 1));
+    });
+  }
+  eat(location.search);
+  eat(location.hash);
+  if (hash.banner !== undefined && +hash.banner >= 0) setBanner(+hash.banner);
+}
+
+function setBanner(n) {
+  BANNER = Math.max(0, Math.min(200, n | 0));
+  try { localStorage.setItem('llBanner', String(BANNER)); } catch (e) {}
 }
 
 /* The token is remembered on this origin after the first visit.
@@ -154,6 +196,27 @@ document.getElementById('form').addEventListener('submit', function (ev) {
   try { localStorage.setItem('llToken', TOKEN); } catch (e) {}
   start();
 });
+
+/* The tuner adjusts the crop live. Nothing reloads, so the app keeps its state
+   while you nudge the number: what you see is what the installed app will use. */
+(function () {
+  var bar = document.getElementById('tune'), val = document.getElementById('tval');
+  function show() { val.textContent = BANNER; }
+  if (hash.tune === '1') { bar.classList.remove('hide'); show(); }
+  bar.addEventListener('click', function (ev) {
+    var t = ev.target;
+    if (t.id === 'done') {
+      /* drop every parameter and land on the URL the home screen icon uses,
+         so what you just tuned is what you will get when you launch it */
+      location.href = location.pathname;
+      return;
+    }
+    var d = t.getAttribute && t.getAttribute('data-d');
+    if (!d) return;
+    setBanner(BANNER + (+d));
+    show(); size();
+  });
+})();
 
 addEventListener('resize', size);
 addEventListener('orientationchange', function () { setTimeout(size, 150); });
