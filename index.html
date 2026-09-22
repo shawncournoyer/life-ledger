@@ -38,9 +38,12 @@
   .hide{display:none!important}
   /* Crop tuner. Only visible with ?tune=1, and it sits on top of the app so the
      effect of each tap is visible immediately. */
-  #tune{position:fixed;left:8px;right:8px;bottom:8px;z-index:9;display:flex;gap:6px;
-        align-items:center;background:#161B22;border:1px solid #262D36;border-radius:10px;
+  #tune{position:fixed;left:8px;right:8px;bottom:8px;z-index:9;
+        background:#161B22;border:1px solid #262D36;border-radius:10px;
         padding:8px;box-shadow:0 6px 24px rgba(0,0,0,.5)}
+  #tunetip{color:#8B949E;font-size:12px;line-height:1.35;margin:2px 4px 8px;text-align:center}
+  #tunetip b{color:#E8EAED;font-weight:600}
+  #tunerow{display:flex;gap:6px;align-items:center}
   #tune button{flex:1;padding:10px 0;background:#1B2230;color:#E8EAED;border:1px solid #262D36;
                border-radius:8px;font:600 15px/1 -apple-system,Roboto,system-ui,sans-serif;
                -webkit-appearance:none}
@@ -54,12 +57,19 @@
 <div id="clip" class="hide"><iframe id="app" title="Life Ledger"></iframe></div>
 
 <div id="tune" class="hide">
-  <button type="button" data-d="-8">−8</button>
-  <button type="button" data-d="-2">−2</button>
-  <span id="tval">46</span>
-  <button type="button" data-d="2">+2</button>
-  <button type="button" data-d="8">+8</button>
-  <button type="button" id="done">Done</button>
+  <div id="tunetip">
+    This trims the top of the screen to hide Google's grey banner.<br>
+    Tap <b>−8</b> until the <b>LEDGER / STATUS / ADD</b> buttons appear at the very top,
+    then <b>+2</b> until no grey strip is left above them.
+  </div>
+  <div id="tunerow">
+    <button type="button" data-d="-8">−8</button>
+    <button type="button" data-d="-2">−2</button>
+    <span id="tval">46</span>
+    <button type="button" data-d="2">+2</button>
+    <button type="button" data-d="8">+8</button>
+    <button type="button" id="done">Done</button>
+  </div>
 </div>
 
 <div id="msg">
@@ -96,9 +106,10 @@ var BANNER_DEFAULT = 46;
 var BANNER = BANNER_DEFAULT;
 /* Note the isFinite check: +null is 0, so a plain ">= 0" test on an unset key
    silently sets the crop to zero. */
+var BANNER_SET = false;          // has this device ever been tuned?
 try {
   var b = localStorage.getItem('llBanner');
-  if (b !== null && isFinite(+b) && +b >= 0) BANNER = +b;
+  if (b !== null && isFinite(+b) && +b >= 0) { BANNER = +b; BANNER_SET = true; }
 } catch (e) {}
 
 var EXEC = 'https://script.google.com/macros/s/AKfycbz_t7yUQQfXqDWRy7PWJh-Ho9HbPSUMU2B0GyTqgj-DiXpDeVC7n1jV9JtQ7XADHgsa7A/exec';   // already set to your deployment
@@ -126,6 +137,7 @@ function readHash() {
 
 function setBanner(n) {
   BANNER = Math.max(0, Math.min(200, n | 0));
+  BANNER_SET = true;
   try { localStorage.setItem('llBanner', String(BANNER)); } catch (e) {}
 }
 
@@ -177,6 +189,7 @@ function start() {
   clip.classList.remove('hide');
   size();
   frame.src = src(hash.v || '');                   // no mode = the app's sticky one
+  if (window.showTune) showTune(hash.tune === '1');
 }
 
 /* Typing the token beats putting it in the URL: no fragment to lose, no
@@ -198,16 +211,28 @@ document.getElementById('form').addEventListener('submit', function (ev) {
 });
 
 /* The tuner adjusts the crop live. Nothing reloads, so the app keeps its state
-   while you nudge the number: what you see is what the installed app will use. */
+   while you nudge the number: what you see is what the installed app will use.
+
+   It opens BY ITSELF the first time this device shows the app, because the
+   banner is not the same height everywhere and the alternative was asking
+   someone to hand-edit a URL on a phone. Once a value is saved it never
+   appears again unless ?tune=1 asks for it. */
 (function () {
   var bar = document.getElementById('tune'), val = document.getElementById('tval');
   function show() { val.textContent = BANNER; }
-  if (hash.tune === '1') { bar.classList.remove('hide'); show(); }
+  window.showTune = function (force) {
+    if (!force && BANNER_SET) return;
+    bar.classList.remove('hide');
+    show();
+  };
   bar.addEventListener('click', function (ev) {
     var t = ev.target;
     if (t.id === 'done') {
-      /* drop every parameter and land on the URL the home screen icon uses,
-         so what you just tuned is what you will get when you launch it */
+      /* Persist even if nothing was nudged, so the tuner does not reappear on
+         every launch for someone whose banner really is the default height.
+         Then drop every parameter and land on the URL the home screen icon
+         uses, so what was just tuned is what a real launch will look like. */
+      setBanner(BANNER);
       location.href = location.pathname;
       return;
     }
