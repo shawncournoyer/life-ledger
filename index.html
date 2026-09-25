@@ -18,7 +18,13 @@
      the top. It lives in script.google.com's own document, cross-origin, so it
      cannot be hidden any other way. */
   #clip{position:fixed;inset:0;overflow:hidden}
-  #app{position:absolute;left:0;width:100%;border:0;display:block}
+  /* One pane per mode, stacked. All three stay loaded so switching is a
+     visibility flip rather than a fresh page load. visibility:hidden (not
+     display:none) keeps each pane laid out at the right size, and a hidden
+     pane cannot receive taps. */
+  .pane{position:absolute;left:0;width:100%;border:0;display:block;
+        visibility:hidden;z-index:0}
+  .pane.on{visibility:visible;z-index:1}
   #msg{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;
        padding:28px;text-align:center}
   #msg code{color:#E8EAED;background:#161B22;border:1px solid #262D36;
@@ -54,7 +60,7 @@
 </head>
 <body>
 
-<div id="clip" class="hide"><iframe id="app" title="Life Ledger"></iframe></div>
+<div id="clip" class="hide"></div>
 
 <div id="tune" class="hide">
   <div id="tunetip">
@@ -114,9 +120,17 @@ try {
 
 var EXEC = 'https://script.google.com/macros/s/AKfycbz_t7yUQQfXqDWRy7PWJh-Ho9HbPSUMU2B0GyTqgj-DiXpDeVC7n1jV9JtQ7XADHgsa7A/exec';   // already set to your deployment
 
-var frame = document.getElementById('app');
 var clip  = document.getElementById('clip');
 var hash  = {}, TOKEN = '';
+
+/* One loaded pane per mode. The wrapper, not the server, decides which mode
+   opens: a preload would otherwise overwrite the server's remembered mode, and
+   the wrapper is the only thing that knows which pane you are looking at. */
+var MODES    = ['status', 'ledger', 'add'];
+var frames   = {};                 // mode -> iframe
+var loadedAt = {};                 // mode -> ms, for the staleness check
+var active   = '';
+var STALE_MS = 10 * 60 * 1000;     // a pane older than this reloads when shown
 
 /* Parameters are read from the query string AND the fragment. Both, because
    some mobile paste targets percent-encode a "#" into the path, which is a 404
@@ -159,15 +173,67 @@ function loadToken() {
 }
 loadToken();
 
-function src(mode) {
+function src(mode, prefetch) {
   return EXEC + '?t=' + encodeURIComponent(TOKEN)
        + (mode ? '&v=' + encodeURIComponent(mode) : '')
+       + (prefetch ? '&pf=1' : '')                 // don't remember a preload
        + '&e=1';                                   // tells the app it is wrapped
 }
 
 function size() {
-  frame.style.top    = (-BANNER) + 'px';
-  frame.style.height = (window.innerHeight + BANNER) + 'px';
+  var top = (-BANNER) + 'px', h = (window.innerHeight + BANNER) + 'px';
+  for (var m in frames) { frames[m].style.top = top; frames[m].style.height = h; }
+}
+
+/* ------------------------------------------------------------------ panes */
+
+function makePane(mode, prefetch) {
+  var f = document.createElement('iframe');
+  f.className = 'pane';
+  f.title = 'Life Ledger';
+  f.setAttribute('data-mode', mode);
+  f.addEventListener('load', function () { loadedAt[mode] = Date.now(); });
+  frames[mode] = f;
+  clip.appendChild(f);
+  size();
+  f.src = src(mode, prefetch);
+  return f;
+}
+
+function lastMode() {
+  try { var m = localStorage.getItem('llMode'); if (m && MODES.indexOf(m) !== -1) return m; }
+  catch (e) {}
+  return 'status';
+}
+
+/* Switching is a visibility flip, not a page load, so it is instant. The one
+   thing a kept-alive pane can get wrong is going stale, so a pane older than
+   STALE_MS refetches as it is revealed. */
+function showMode(mode) {
+  if (MODES.indexOf(mode) === -1) return;
+  var f = frames[mode] || makePane(mode, false);
+  if (loadedAt[mode] && Date.now() - loadedAt[mode] > STALE_MS) {
+    f.src = src(mode, false);
+  }
+  for (var m in frames) frames[m].classList.toggle('on', m === mode);
+  active = mode;
+  try { localStorage.setItem('llMode', mode); } catch (e) {}
+}
+
+/* The other two modes load quietly once the visible one has painted, one at a
+   time so they do not compete with it for bandwidth. Each step is guarded: a
+   frame that never fires 'load' must not stall the queue, and the timeout and
+   the load event must not both advance it. */
+function prefetchRest() {
+  var rest = [];
+  for (var i = 0; i < MODES.length; i++) if (MODES[i] !== active) rest.push(MODES[i]);
+  (function next(i) {
+    if (i >= rest.length) return;
+    var moved = false;
+    function go() { if (moved) return; moved = true; setTimeout(function () { next(i + 1); }, 400); }
+    makePane(rest[i], true).addEventListener('load', go);
+    setTimeout(go, 12000);
+  })(0);
 }
 
 /* ?reset=1 forgets the stored token. It is a query string, not a fragment, on
@@ -187,10 +253,23 @@ function start() {
   }
   document.getElementById('msg').classList.add('hide');
   clip.classList.remove('hide');
+  var want = (MODES.indexOf(hash.v) !== -1) ? hash.v : lastMode();
+  if (!frames[want]) makePane(want, false);
+  showMode(want);
   size();
-  frame.src = src(hash.v || '');                   // no mode = the app's sticky one
   if (window.showTune) showTune(hash.tune === '1');
+  /* Preloading is deliberately late. Holding it until the visible pane has
+     finished means the mode you actually asked for never waits behind two you
+     did not. */
+  if (!prefetched) {
+    prefetched = true;
+    var f = frames[want], fired = false;
+    function later() { if (!fired) { fired = true; setTimeout(prefetchRest, 800); } }
+    f.addEventListener('load', later);
+    setTimeout(later, 15000);
+  }
 }
+var prefetched = false;
 
 /* Typing the token beats putting it in the URL: no fragment to lose, no
    encoding to mangle, and it is entered once per device. */
@@ -253,10 +332,9 @@ start();
 /* The app's mode buttons post up here instead of navigating, because a normal
    link with target=_top would replace THIS page with script.google.com and the
    banner would be right back. Only messages from Google's own origins are
-   accepted, and only the three known mode names. */
-var MODES = { ledger: 1, status: 1, add: 1 };
+   accepted, and only the three known mode names.
 
-/* The app runs two frames down (wrapper > script.google.com > googleusercontent
+   The app runs two frames down (wrapper > script.google.com > googleusercontent
    sandbox), so e.source identity cannot be used; a grandchild's window is not
    frame.contentWindow. Falling back to an origin allowlist plus a strict shape
    check, and the payload can only ever name one of three modes. */
@@ -268,8 +346,8 @@ function trusted(origin) {
 addEventListener('message', function (e) {
   if (!trusted(e.origin)) return;
   var d = e.data;
-  if (!d || d.app !== 'lifeledger' || !MODES[d.v]) return;
-  frame.src = src(d.v);
+  if (!d || d.app !== 'lifeledger' || MODES.indexOf(d.v) === -1) return;
+  showMode(d.v);
 });
 </script>
 </body>
