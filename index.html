@@ -221,13 +221,16 @@ function lastMode() {
    STALE_MS refetches as it is revealed. */
 function showMode(mode) {
   if (MODES.indexOf(mode) === -1) return;
+  /* Remembered BEFORE the frame work, not after. If anything below throws, the
+     next launch should still open where you asked to be rather than silently
+     reverting to the last mode that happened to work. */
+  active = mode;
+  try { localStorage.setItem('llMode', mode); } catch (e) {}
   var f = frames[mode] || makePane(mode, false);
   if (loadedAt[mode] && Date.now() - loadedAt[mode] > STALE_MS) {
     f.src = src(mode, false);
   }
   for (var m in frames) frames[m].classList.toggle('on', m === mode);
-  active = mode;
-  try { localStorage.setItem('llMode', mode); } catch (e) {}
 }
 
 /* The other two modes load quietly once the visible one has painted, one at a
@@ -358,6 +361,12 @@ start();
    check, and the payload can only ever name one of three modes. */
 function trusted(origin) {
   if (origin === location.origin) return true;                   // our own page
+  /* A sandboxed frame posts with origin "null", and Apps Script's sandbox is
+     free to be one. Dropping those messages is exactly how a tap on a mode
+     button turns into nothing at all, which is the failure this whole file is
+     defending against. The only frames on this page are ours, the payload can
+     only ever name one of three modes, and the action is a local pane flip. */
+  if (origin === 'null' || origin === '') return true;
   return /^https:\/\/([a-z0-9-]+\.)*(google|googleusercontent)\.com$/.test(origin);
 }
 
@@ -365,7 +374,22 @@ addEventListener('message', function (e) {
   if (!trusted(e.origin)) return;
   var d = e.data;
   if (!d || d.app !== 'lifeledger' || MODES.indexOf(d.v) === -1) return;
-  showMode(d.v);
+
+  /* Answer first, switch second. The app cannot see whether a wrapper is up
+     here (a cross-origin parent cannot be inspected), so it waits for this
+     reply and falls back to following the link if it never comes. Replying
+     before the switch means a slow pane load cannot look like no wrapper. */
+  try { if (e.source) e.source.postMessage({ app: 'lifeledger', ack: d.v }, '*'); }
+  catch (err) {}
+
+  /* Answering and then failing to switch would be the worst of both: the app
+     cancels its fallback on the ack and waits forever for a pane that never
+     appears. So if the switch throws, take the answer back. */
+  try { showMode(d.v); }
+  catch (err2) {
+    try { if (e.source) e.source.postMessage({ app: 'lifeledger', fail: d.v }, '*'); }
+    catch (err3) {}
+  }
 });
 </script>
 </body>
