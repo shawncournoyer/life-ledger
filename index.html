@@ -173,10 +173,20 @@ function loadToken() {
 }
 loadToken();
 
+/* The phone's own date, yyyy-MM-dd. The server cannot know where you are, so
+   the wrapper tells it: logging at 9pm in California used to land on the next
+   day, because New York had already rolled over. The server ignores this if
+   it is more than a day out, which means a broken clock rather than a trip. */
+function localDate() {
+  var d = new Date(), p = function (n) { return String(n).padStart(2, '0'); };
+  return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate());
+}
+
 function src(mode, prefetch) {
   return EXEC + '?t=' + encodeURIComponent(TOKEN)
        + (mode ? '&v=' + encodeURIComponent(mode) : '')
        + (prefetch ? '&pf=1' : '')                 // don't remember a preload
+       + '&d=' + localDate()
        + '&e=1';                                   // tells the app it is wrapped
 }
 
@@ -224,9 +234,17 @@ function showMode(mode) {
    time so they do not compete with it for bandwidth. Each step is guarded: a
    frame that never fires 'load' must not stall the queue, and the timeout and
    the load event must not both advance it. */
+/* Ledger is not preloaded. It is by far the heaviest mode, and preloading it
+   downloaded its payload and Chart.js on every launch whether or not it was
+   opened. The first tap on Ledger each session is a normal load; after that
+   the pane stays resident and switching is instant as before. */
+var NO_PREFETCH = ['ledger'];
+
 function prefetchRest() {
   var rest = [];
-  for (var i = 0; i < MODES.length; i++) if (MODES[i] !== active) rest.push(MODES[i]);
+  for (var i = 0; i < MODES.length; i++) {
+    if (MODES[i] !== active && NO_PREFETCH.indexOf(MODES[i]) === -1) rest.push(MODES[i]);
+  }
   (function next(i) {
     if (i >= rest.length) return;
     var moved = false;
